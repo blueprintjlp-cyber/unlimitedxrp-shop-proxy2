@@ -1,0 +1,21 @@
+# Netlify configuration for Unlimited XRP Shop proxy
+# This routes ALL requests through an Edge Function that fetches the Printify storefront
+# and rewrites links so users always stay on unlimitedxrp.shop.
+
+[edge_functions]
+  # Edge functions live in /netlify/edge-functions by default
+  # You can keep the default or specify bundle path explicitly
+  # bundle = "netlify/edge-functions"
+
+[[edge_functions]]
+  function = "proxy"
+  path = "/*"
+
+# Optional: force HTTPS and HSTS (can be toggled later)
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Strict-Transport-Security = "max-age=31536000; includeSubDomains; preload"
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
