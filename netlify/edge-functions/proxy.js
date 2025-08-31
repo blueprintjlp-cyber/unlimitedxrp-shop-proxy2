@@ -1,5 +1,5 @@
 // netlify/edge-functions/proxy.js
-const ORIGIN = new URL("https://vaultfiber-xrp.printify.me");
+const ORIGIN = new URL("https://unlimitedxrpshop.printify.me");
 
 export default async (request, context) => {
   const reqUrl = new URL(request.url);
@@ -28,17 +28,25 @@ export default async (request, context) => {
 
   if (isHTML) {
     let html = await upstream.text();
+
+    // replace all absolute references to the Printify origin with your domain
     const originRe = new RegExp(ORIGIN.origin.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&"), "g");
     html = html.replace(originRe, reqUrl.origin);
-    html = html.replace(/(https?:)?\/\/vaultfiber-xrp\.printify\.me/gi, reqUrl.origin);
+
+    // catch protocol-less or other host references to your Printify subdomain
+    html = html.replace(/(https?:)?\/\/unlimitedxrpshop\.printify\.me/gi, reqUrl.origin);
+
+    // hide "Powered by Printify" (best-effort)
     html = html.replace(/Powered by\s*Printify/gi, "");
     const inject = `<style>[href*="printify.com"],.printify-badge,[data-testid="powered-by-printify"]{display:none!important;}</style>`;
     html = html.replace(/<head(.*?)>/i, `<head$1>${inject}`);
+
     const encoder = new TextEncoder();
     resHeaders.set("content-length", String(encoder.encode(html).length));
     return new Response(html, { status: upstream.status, headers: resHeaders });
   }
 
+  // stream non-HTML assets as-is
   return new Response(upstream.body, { status: upstream.status, headers: resHeaders });
 };
 
