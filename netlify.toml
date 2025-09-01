@@ -1,5 +1,5 @@
 [[redirects]]
-from = "/page-not-found"
-to = "/"
+from = "/*"
+to = "https://unlimitedxrpshop.printify.me/:splat"
 status = 200
 force = true
