@@ -1,7 +1,6 @@
 // netlify/edge-functions/proxy.js
 const ORIGIN = new URL("https://unlimitedxrpshop.printify.me");
 
-// Treat as text (we rewrite)
 const TEXT_TYPES = [
   "text/html",
   "application/xhtml+xml",
@@ -10,30 +9,30 @@ const TEXT_TYPES = [
   "application/json"
 ];
 
-export default async (request, context) => {
+export default async (request) => {
   const reqUrl = new URL(request.url);
 
-  // Any request to /page-not-found -> serve homepage instead
+  // Normalize any direct hit to /page-not-found to the homepage
   const upstreamPath = reqUrl.pathname.startsWith("/page-not-found") ? "/" : reqUrl.pathname;
   const upstreamUrl = new URL(upstreamPath + reqUrl.search, ORIGIN);
 
-  // Forward as if we are the origin
-  const fwdHeaders = new Headers(request.headers);
-  fwdHeaders.set("host", ORIGIN.host);
-  fwdHeaders.delete("connection");
-  fwdHeaders.set("x-forwarded-host", reqUrl.host);
-  fwdHeaders.set("x-forwarded-proto", reqUrl.protocol.replace(":", ""));
+  // Forward like a real origin request
+  const fwd = new Headers(request.headers);
+  fwd.set("host", ORIGIN.host);
+  fwd.delete("connection");
+  fwd.set("x-forwarded-host", reqUrl.host);
+  fwd.set("x-forwarded-proto", reqUrl.protocol.replace(":", ""));
 
   const init = {
     method: request.method,
-    headers: fwdHeaders,
+    headers: fwd,
     redirect: "manual",
     body: ["GET", "HEAD"].includes(request.method) ? undefined : request.body
   };
 
   let upstream = await fetch(upstreamUrl, init);
 
-  // Rewrite server redirects to our domain, collapse /page-not-found -> /
+  // Rewrite server redirects and collapse /page-not-found -> /
   if (upstream.status >= 300 && upstream.status < 400) {
     const h = new Headers(upstream.headers);
     const loc = h.get("location") || "";
@@ -48,13 +47,13 @@ export default async (request, context) => {
     return new Response(null, { status: upstream.status, headers: h });
   }
 
-  // If origin says 404, serve homepage instead
+  // If origin returns 404, serve homepage instead
   if (upstream.status === 404) {
     upstream = await fetch(new URL("/", ORIGIN), init);
   }
 
   const out = new Headers(upstream.headers);
-  out.delete("content-security-policy"); // avoid CSP blocking our tiny inject
+  out.delete("content-security-policy"); // allow our small inject
   strip(out);
   if (!out.has("cache-control")) out.set("cache-control", "public, max-age=300");
 
@@ -65,26 +64,39 @@ export default async (request, context) => {
     return new Response(upstream.body, { status: upstream.status, headers: out });
   }
 
-  // Text rewriting
+  // ---- Text rewriting & JS guard ----
   let body = await upstream.text();
 
-  // Replace origin with our domain
+  // Replace absolute & host-only origin refs with our domain
   const originRe = new RegExp(ORIGIN.origin.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&"), "g");
   body = body.replace(originRe, reqUrl.origin);
   body = body.replace(/(https?:)?\/\/unlimitedxrpshop\.printify\.me/gi, reqUrl.origin);
 
-  // Kill client-side pushes to /page-not-found (all variants)
-  body = body
-    .replace(/\/page-not-found/gi, "/")
-    .replace(/location\.(assign|replace)\(['"]\/page-not-found['"]\)/gi, "location.$1('/')")
-    .replace(/window\.location\s*=\s*['"]\/page-not-found['"]/gi, "window.location='/'")
-  ;
+  // Guard against client-side pushes to /page-not-found (before their app runs)
+  const guard = `
+<script>(function(){
+  function isNF(u){try{if(typeof u==='string'){return u.indexOf('/page-not-found')>-1;} if(u&&u.pathname){return u.pathname.indexOf('/page-not-found')===0;} }catch(e){} return false;}
+  var la = location.assign.bind(location);
+  location.assign = function(u){ if(isNF(u)) return; return la(u); };
+  var lr = location.replace.bind(location);
+  location.replace = function(u){ if(isNF(u)) return; return lr(u); };
+  var ps = history.pushState.bind(history);
+  history.pushState = function(s,t,u){ if(isNF(u)) u='/'; return ps(s,t,u); };
+  var rs = history.replaceState.bind(history);
+  history.replaceState = function(s,t,u){ if(isNF(u)) u='/'; return rs(s,t,u); };
+})();</script>`.trim();
 
-  // Inject <base> so relative links resolve under our domain, and hide printify badges
+  // Inject <base>, CSS (hide printify badges), and the guard script as early as possible
   if (/<head[^>]*>/i.test(body)) {
-    const inject = `<base href="/"><style>[href*="printify.com"],.printify-badge,[data-testid="powered-by-printify"]{display:none!important;}</style>`;
+    const inject = `<base href="/"><style>[href*="printify.com"],.printify-badge,[data-testid="powered-by-printify"]{display:none!important;}</style>${guard}`;
     body = body.replace(/<head(.*?)>/i, `<head$1>${inject}`);
+  } else {
+    // Fallback injection if <head> missing
+    body = `${guard}${body}`;
   }
+
+  // Normalize literal references to /page-not-found in text assets
+  body = body.replace(/\/page-not-found/gi, "/");
 
   // Let Netlify set content-length
   out.delete("content-length");
